@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.resolve(__dirname, "../dist/cli.js");
 
 /** Run the CLI with the given args and optional env overrides. */
@@ -34,7 +35,11 @@ describe("CLI", () => {
       expect(stdout).toContain("portless");
       expect(stdout).toContain("Usage:");
       expect(stdout).toContain("Examples:");
+      expect(stdout).toContain("proxy start");
       expect(stdout).toContain("--port");
+      expect(stdout).toContain("-p");
+      expect(stdout).toContain("--foreground");
+      expect(stdout).toContain("PORTLESS_STATE_DIR");
     });
 
     it("prints help and exits 0 with -h", () => {
@@ -67,16 +72,26 @@ describe("CLI", () => {
 
   describe("list", () => {
     it("shows no active routes message when none registered", () => {
-      // Use a temp dir so we get a clean route store
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-cli-test-"));
-      const emptyRoutesPath = path.join(tmpDir, "routes.json");
-      fs.writeFileSync(emptyRoutesPath, "[]");
-
-      // Note: the CLI hardcodes /tmp/portless, so 'list' reads from there.
-      // We just verify it doesn't crash and returns 0.
+      // Note: the CLI discovers the state dir dynamically. We just verify
+      // it doesn't crash and returns 0.
       const { status } = run(["list"]);
       expect(status).toBe(0);
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+  });
+
+  describe("proxy", () => {
+    it("shows proxy usage hint for bare 'proxy' command", () => {
+      const { status, stdout } = run(["proxy"]);
+      expect(status).toBe(0);
+      expect(stdout).toContain("proxy start");
+      expect(stdout).toContain("proxy stop");
+      expect(stdout).toContain("--foreground");
+    });
+
+    it("exits 1 for unknown proxy subcommand", () => {
+      const { status, stdout } = run(["proxy", "unknown"]);
+      expect(status).toBe(1);
+      expect(stdout).toContain("proxy start");
     });
   });
 

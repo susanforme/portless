@@ -3,6 +3,21 @@ import * as path from "node:path";
 import type { RouteInfo } from "./types.js";
 import { isErrnoException } from "./utils.js";
 
+/** How long (ms) before a lock directory is considered stale and forcibly removed. */
+const STALE_LOCK_THRESHOLD_MS = 10_000;
+
+/** Default maximum number of retries when acquiring the file lock. */
+const LOCK_MAX_RETRIES = 20;
+
+/** Delay (ms) between lock acquisition retries. */
+const LOCK_RETRY_DELAY_MS = 50;
+
+/** File permission mode for route and state files. */
+export const FILE_MODE = 0o644;
+
+/** Directory permission mode for the state directory. */
+export const DIR_MODE = 0o755;
+
 export interface RouteMapping extends RouteInfo {
   pid: number;
 }
@@ -27,6 +42,7 @@ export class RouteStore {
   private readonly routesPath: string;
   private readonly lockPath: string;
   readonly pidPath: string;
+  readonly portFilePath: string;
   private readonly onWarning: ((message: string) => void) | undefined;
 
   constructor(dir: string, options?: { onWarning?: (message: string) => void }) {
@@ -34,15 +50,16 @@ export class RouteStore {
     this.routesPath = path.join(dir, "routes.json");
     this.lockPath = path.join(dir, "routes.lock");
     this.pidPath = path.join(dir, "proxy.pid");
+    this.portFilePath = path.join(dir, "proxy.port");
     this.onWarning = options?.onWarning;
   }
 
   ensureDir(): void {
     if (!fs.existsSync(this.dir)) {
-      fs.mkdirSync(this.dir, { recursive: true, mode: 0o755 });
+      fs.mkdirSync(this.dir, { recursive: true, mode: DIR_MODE });
     }
     try {
-      fs.chmodSync(this.dir, 0o755);
+      fs.chmodSync(this.dir, DIR_MODE);
     } catch {
       // May fail if directory is owned by another user (e.g. root); non-fatal
     }
@@ -60,17 +77,17 @@ export class RouteStore {
     Atomics.wait(RouteStore.sleepBuffer, 0, 0, ms);
   }
 
-  acquireLock(maxRetries = 20, retryDelayMs = 50): boolean {
+  private acquireLock(maxRetries = LOCK_MAX_RETRIES, retryDelayMs = LOCK_RETRY_DELAY_MS): boolean {
     for (let i = 0; i < maxRetries; i++) {
       try {
         fs.mkdirSync(this.lockPath);
         return true;
       } catch (err: unknown) {
         if (isErrnoException(err) && err.code === "EEXIST") {
-          // Check for stale lock (older than 10 seconds)
+          // Check for stale lock
           try {
             const stat = fs.statSync(this.lockPath);
-            if (Date.now() - stat.mtimeMs > 10000) {
+            if (Date.now() - stat.mtimeMs > STALE_LOCK_THRESHOLD_MS) {
               fs.rmSync(this.lockPath, { recursive: true });
               continue;
             }
@@ -90,7 +107,7 @@ export class RouteStore {
     return false;
   }
 
-  releaseLock(): void {
+  private releaseLock(): void {
     try {
       fs.rmSync(this.lockPath, { recursive: true });
     } catch {
@@ -139,7 +156,7 @@ export class RouteStore {
         // Persist the cleaned-up list so stale entries don't accumulate.
         // Only safe when caller holds the lock.
         try {
-          fs.writeFileSync(this.routesPath, JSON.stringify(alive, null, 2), { mode: 0o644 });
+          fs.writeFileSync(this.routesPath, JSON.stringify(alive, null, 2), { mode: FILE_MODE });
         } catch {
           // Write may fail (permissions); non-fatal
         }
@@ -151,8 +168,7 @@ export class RouteStore {
   }
 
   private saveRoutes(routes: RouteMapping[]): void {
-    this.ensureDir();
-    fs.writeFileSync(this.routesPath, JSON.stringify(routes, null, 2), { mode: 0o644 });
+    fs.writeFileSync(this.routesPath, JSON.stringify(routes, null, 2), { mode: FILE_MODE });
   }
 
   addRoute(hostname: string, port: number, pid: number): void {
