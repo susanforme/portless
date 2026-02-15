@@ -80,7 +80,7 @@ flowchart TD
     Proxy --> App2
 ```
 
-1. **Start the proxy** -- runs on port 80 in the background (requires sudo once)
+1. **Start the proxy** -- runs on port 80 by default in the background (requires sudo once)
 2. **Run apps** -- `portless <name> <command>` assigns a free port and registers with the proxy
 3. **Access via URL** -- `http://<name>.localhost` routes through the proxy to your app
 
@@ -97,8 +97,13 @@ PORTLESS=0 pnpm dev              # Bypasses proxy, uses default port
 # Also accepts PORTLESS=skip
 
 # Proxy control
-sudo portless proxy              # Start the proxy
+sudo portless proxy              # Start the proxy (port 80)
+sudo portless proxy --port 8080  # Start the proxy on a custom port
 sudo portless proxy stop         # Stop the proxy
+
+# Options
+--port <number>                  # Port for the proxy (default: 80)
+                                 # Ports >= 1024 do not require sudo
 
 # Info
 portless --help                  # Show help

@@ -31,18 +31,36 @@ function prompt(question: string): Promise<string> {
 
 // Use /tmp for shared state so both sudo and non-sudo processes can access
 const PORTLESS_DIR = "/tmp/portless";
+const PROXY_PORT_PATH = path.join(PORTLESS_DIR, "proxy.port");
+const DEFAULT_PROXY_PORT = 80;
 const store = new RouteStore(PORTLESS_DIR, {
   onWarning: (msg) => console.warn(chalk.yellow(msg)),
 });
+
+/** Read the proxy port from the port file, falling back to 80. */
+function readProxyPort(): number {
+  try {
+    const raw = fs.readFileSync(PROXY_PORT_PATH, "utf-8").trim();
+    const port = parseInt(raw, 10);
+    return isNaN(port) ? DEFAULT_PROXY_PORT : port;
+  } catch {
+    return DEFAULT_PROXY_PORT;
+  }
+}
 
 /**
  * Poll until the proxy is listening or the timeout is reached.
  * Returns true if the proxy became ready, false on timeout.
  */
-async function waitForProxy(maxAttempts = 20, intervalMs = 250): Promise<boolean> {
+async function waitForProxy(
+  proxyPort?: number,
+  maxAttempts = 20,
+  intervalMs = 250
+): Promise<boolean> {
+  const port = proxyPort ?? readProxyPort();
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    if (await isProxyRunning()) {
+    if (await isProxyRunning(port)) {
       return true;
     }
   }
@@ -97,7 +115,7 @@ function spawnCommand(
   });
 }
 
-function startProxyServer(): void {
+function startProxyServer(proxyPort: number): void {
   store.ensureDir();
 
   // Create empty routes file if it doesn't exist
@@ -142,7 +160,7 @@ function startProxyServer(): void {
 
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
-      console.error(chalk.red("Port 80 is already in use"));
+      console.error(chalk.red(`Port ${proxyPort} is already in use`));
     } else if (err.code === "EACCES") {
       console.error(chalk.red("Permission denied. Use: sudo portless proxy"));
     } else {
@@ -151,10 +169,11 @@ function startProxyServer(): void {
     process.exit(1);
   });
 
-  server.listen(80, () => {
-    // Save PID once the server is actually listening
+  server.listen(proxyPort, () => {
+    // Save PID and port once the server is actually listening
     fs.writeFileSync(store.pidPath, process.pid.toString(), { mode: 0o644 });
-    console.log(chalk.green("HTTP proxy listening on port 80"));
+    fs.writeFileSync(PROXY_PORT_PATH, proxyPort.toString(), { mode: 0o644 });
+    console.log(chalk.green(`HTTP proxy listening on port ${proxyPort}`));
   });
 
   // Cleanup on exit
@@ -169,6 +188,11 @@ function startProxyServer(): void {
       fs.unlinkSync(store.pidPath);
     } catch {
       // PID file may already be removed; non-fatal
+    }
+    try {
+      fs.unlinkSync(PROXY_PORT_PATH);
+    } catch {
+      // Port file may already be removed; non-fatal
     }
     server.close(() => process.exit(0));
     // Force exit after a short timeout in case connections don't drain
@@ -189,6 +213,8 @@ async function stopProxy(): Promise<void> {
     return;
   }
 
+  const proxyPort = readProxyPort();
+
   try {
     const pid = parseInt(fs.readFileSync(pidPath, "utf-8"), 10);
     if (isNaN(pid)) {
@@ -206,12 +232,12 @@ async function stopProxy(): Promise<void> {
       return;
     }
 
-    // Verify the process is actually running a proxy on port 80.
-    // If the PID was recycled by an unrelated process, port 80 won't be listening.
-    if (!(await isProxyRunning())) {
+    // Verify the process is actually running a proxy on the expected port.
+    // If the PID was recycled by an unrelated process, the port won't be listening.
+    if (!(await isProxyRunning(proxyPort))) {
       console.log(
         chalk.yellow(
-          "PID file exists but port 80 is not listening. The PID may have been recycled."
+          `PID file exists but port ${proxyPort} is not listening. The PID may have been recycled.`
         )
       );
       console.log(chalk.yellow("Removing stale PID file."));
@@ -221,6 +247,11 @@ async function stopProxy(): Promise<void> {
 
     process.kill(pid, "SIGTERM");
     fs.unlinkSync(pidPath);
+    try {
+      fs.unlinkSync(PROXY_PORT_PATH);
+    } catch {
+      // Port file may already be removed; non-fatal
+    }
     console.log(chalk.green("Proxy stopped."));
   } catch (err: unknown) {
     if (isErrnoException(err) && err.code === "EPERM") {
@@ -253,12 +284,13 @@ function listRoutes(): void {
 
 async function runApp(name: string, commandArgs: string[]) {
   const hostname = parseHostname(name);
+  const proxyPort = readProxyPort();
 
   console.log(chalk.blue.bold(`\nportless\n`));
   console.log(chalk.gray(`-- ${hostname} (auto-resolves to 127.0.0.1)`));
 
   // Check if proxy is running, auto-start if possible
-  if (!(await isProxyRunning())) {
+  if (!(await isProxyRunning(proxyPort))) {
     if (process.stdin.isTTY) {
       // Ask user if they want to start the proxy
       const answer = await prompt(chalk.yellow("Proxy not running. Start it? [Y/n/skip] "));
@@ -355,10 +387,11 @@ Eliminates port conflicts, memorizing port numbers, and cookie/storage
 clashes by giving each dev server a stable .localhost URL.
 
 ${chalk.bold("Usage:")}
-  ${chalk.cyan("sudo portless proxy")}       Start the proxy (run once, keep open)
-  ${chalk.cyan("sudo portless proxy stop")}  Stop the proxy
-  ${chalk.cyan("portless <name> <cmd>")}     Run your app through the proxy
-  ${chalk.cyan("portless list")}             Show active routes
+  ${chalk.cyan("sudo portless proxy")}              Start the proxy (run once, keep open)
+  ${chalk.cyan("sudo portless proxy --port 8080")}  Start the proxy on a custom port
+  ${chalk.cyan("sudo portless proxy stop")}         Stop the proxy
+  ${chalk.cyan("portless <name> <cmd>")}            Run your app through the proxy
+  ${chalk.cyan("portless list")}                    Show active routes
 
 ${chalk.bold("Examples:")}
   sudo portless proxy              # Start proxy in terminal 1
@@ -373,10 +406,14 @@ ${chalk.bold("In package.json:")}
   }
 
 ${chalk.bold("How it works:")}
-  1. Start the proxy once with sudo (listens on port 80)
+  1. Start the proxy once with sudo (listens on port 80 by default)
   2. Run your apps - they register automatically  
   3. Access via http://<name>.localhost
   4. .localhost domains auto-resolve to 127.0.0.1
+
+${chalk.bold("Options:")}
+  --port <number>               Port for the proxy to listen on (default: 80)
+                                Ports >= 1024 do not require sudo
 
 ${chalk.bold("Skip portless:")}
   PORTLESS=0 pnpm dev           # Runs command directly without proxy
@@ -405,8 +442,26 @@ ${chalk.bold("Skip portless:")}
 
     const isDaemon = args.includes("--daemon");
 
+    // Parse --port flag
+    let proxyPort = DEFAULT_PROXY_PORT;
+    const portFlagIndex = args.indexOf("--port");
+    if (portFlagIndex !== -1) {
+      const portValue = args[portFlagIndex + 1];
+      if (!portValue || portValue.startsWith("-")) {
+        console.error(chalk.red("Error: --port requires a port number"));
+        console.log(chalk.blue("Usage: portless proxy --port 8080"));
+        process.exit(1);
+      }
+      proxyPort = parseInt(portValue, 10);
+      if (isNaN(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
+        console.error(chalk.red(`Error: Invalid port number: ${portValue}`));
+        console.log(chalk.blue("Port must be between 1 and 65535"));
+        process.exit(1);
+      }
+    }
+
     // Check if already running
-    if (await isProxyRunning()) {
+    if (await isProxyRunning(proxyPort)) {
       if (!isDaemon) {
         console.log(chalk.yellow("Proxy is already running."));
         console.log(chalk.blue("To restart: portless proxy stop && sudo portless proxy"));
@@ -414,9 +469,9 @@ ${chalk.bold("Skip portless:")}
       return;
     }
 
-    // Check if running as root
-    if (process.getuid!() !== 0) {
-      console.error(chalk.red("Error: Proxy requires sudo for port 80"));
+    // Check if running as root (only required for privileged ports)
+    if (proxyPort < 1024 && process.getuid!() !== 0) {
+      console.error(chalk.red(`Error: Proxy requires sudo for port ${proxyPort}`));
       console.log(chalk.blue("Usage: sudo portless proxy"));
       process.exit(1);
     }
@@ -432,7 +487,12 @@ ${chalk.bold("Skip portless:")}
         // May fail if file is owned by another user; non-fatal
       }
 
-      const child = spawn(process.execPath, [process.argv[1], "proxy"], {
+      const daemonArgs = [process.argv[1], "proxy"];
+      if (portFlagIndex !== -1) {
+        daemonArgs.push("--port", proxyPort.toString());
+      }
+
+      const child = spawn(process.execPath, daemonArgs, {
         detached: true,
         stdio: ["ignore", logFd, logFd],
         env: process.env,
@@ -441,7 +501,7 @@ ${chalk.bold("Skip portless:")}
       fs.closeSync(logFd);
 
       // Wait for proxy to be ready
-      if (!(await waitForProxy())) {
+      if (!(await waitForProxy(proxyPort))) {
         console.error(chalk.red("Proxy failed to start"));
         if (fs.existsSync(logPath)) {
           console.log(chalk.gray(`Check logs: ${logPath}`));
@@ -452,7 +512,7 @@ ${chalk.bold("Skip portless:")}
     }
 
     console.log(chalk.blue.bold("\nportless proxy\n"));
-    startProxyServer();
+    startProxyServer(proxyPort);
     return;
   }
 

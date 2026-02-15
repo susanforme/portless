@@ -34,6 +34,7 @@ describe("CLI", () => {
       expect(stdout).toContain("portless");
       expect(stdout).toContain("Usage:");
       expect(stdout).toContain("Examples:");
+      expect(stdout).toContain("--port");
     });
 
     it("prints help and exits 0 with -h", () => {

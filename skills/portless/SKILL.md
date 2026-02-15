@@ -67,9 +67,9 @@ PORTLESS=0 pnpm dev   # Bypasses proxy, uses default port
 
 ## How It Works
 
-1. `sudo portless proxy` starts an HTTP reverse proxy on port 80
+1. `sudo portless proxy` starts an HTTP reverse proxy on port 80 (configurable with `--port`)
 2. `portless <name> <cmd>` assigns a random free port (4000-4999) via the `PORT` env var and registers the app with the proxy
-3. The browser hits `http://<name>.localhost` on port 80; the proxy forwards to the app's assigned port
+3. The browser hits `http://<name>.localhost` on the proxy port; the proxy forwards to the app's assigned port
 
 `.localhost` domains resolve to `127.0.0.1` natively on macOS and Linux -- no `/etc/hosts` editing needed.
 
@@ -77,14 +77,15 @@ Most frameworks (Next.js, Vite, Express, etc.) respect the `PORT` env var automa
 
 ## CLI Reference
 
-| Command                           | Description                          |
-| --------------------------------- | ------------------------------------ |
-| `portless <name> <cmd> [args...]` | Run app at `http://<name>.localhost` |
-| `portless list`                   | Show active routes                   |
-| `sudo portless proxy`             | Start the proxy daemon on port 80    |
-| `sudo portless proxy stop`        | Stop the proxy daemon                |
-| `portless --help` / `-h`          | Show help                            |
-| `portless --version` / `-v`       | Show version                         |
+| Command                               | Description                          |
+| ------------------------------------- | ------------------------------------ |
+| `portless <name> <cmd> [args...]`     | Run app at `http://<name>.localhost` |
+| `portless list`                       | Show active routes                   |
+| `sudo portless proxy`                 | Start the proxy daemon on port 80    |
+| `sudo portless proxy --port <number>` | Start the proxy on a custom port     |
+| `sudo portless proxy stop`            | Stop the proxy daemon                |
+| `portless --help` / `-h`              | Show help                            |
+| `portless --version` / `-v`           | Show version                         |
 
 ## Troubleshooting
 
@@ -100,7 +101,11 @@ In a TTY, portless offers to start it automatically. In non-interactive contexts
 
 ### Port 80 already in use
 
-Another process (e.g. Apache, nginx) is bound to port 80. Stop it first, then start the proxy.
+Another process (e.g. Apache, nginx) is bound to port 80. Either stop it first, or use a different port:
+
+```bash
+portless proxy --port 8080   # No sudo needed for ports >= 1024
+```
 
 ### Framework not respecting PORT
 
@@ -111,11 +116,12 @@ Some frameworks need explicit configuration to use the `PORT` env var. Examples:
 
 ### Permission errors
 
-The proxy requires `sudo` because port 80 is a privileged port. Run proxy commands with `sudo`:
+The proxy requires `sudo` because port 80 is a privileged port (< 1024). Either run with `sudo` or use an unprivileged port:
 
 ```bash
-sudo portless proxy
-sudo portless proxy stop
+sudo portless proxy              # Port 80, requires sudo
+portless proxy --port 8080       # Port 8080, no sudo needed
+sudo portless proxy stop         # Stop requires sudo if started with sudo
 ```
 
 ### Requirements
