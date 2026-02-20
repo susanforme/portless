@@ -1,0 +1,95 @@
+# Commands
+
+## Run an app
+
+```bash
+portless <name> <cmd> [args...]
+```
+
+Starts your command and maps it to `http://<name>.localhost:1355`. Auto-starts the proxy if needed.
+
+```bash
+portless myapp next dev
+portless api pnpm start
+portless docs.myapp next dev
+```
+
+## List routes
+
+```bash
+portless list
+```
+
+Shows active routes and their assigned ports.
+
+## Trust the CA
+
+```bash
+sudo portless trust
+```
+
+Adds the portless certificate authority to your system trust store. Required once for HTTPS with auto-generated certs.
+
+## Proxy control
+
+### Start
+
+```bash
+portless proxy start
+```
+
+<table>
+  <thead>
+    <tr>
+      <th>Flag</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>`-p, --port <number>`</td>
+      <td>Proxy port (default: 1355). Below 1024 requires sudo.</td>
+    </tr>
+    <tr>
+      <td>`--https`</td>
+      <td>Enable HTTP/2 + TLS with auto-generated certs</td>
+    </tr>
+    <tr>
+      <td>`--cert <path>`</td>
+      <td>Custom TLS certificate (implies `--https`)</td>
+    </tr>
+    <tr>
+      <td>`--key <path>`</td>
+      <td>Custom TLS private key (implies `--https`)</td>
+    </tr>
+    <tr>
+      <td>`--no-tls`</td>
+      <td>Disable HTTPS (overrides `PORTLESS_HTTPS`)</td>
+    </tr>
+    <tr>
+      <td>`--foreground`</td>
+      <td>Run in foreground instead of daemon mode</td>
+    </tr>
+  </tbody>
+</table>
+
+### Stop
+
+```bash
+portless proxy stop
+```
+
+## Bypass portless
+
+```bash
+PORTLESS=0 pnpm dev
+```
+
+Runs the command directly without the proxy. Also accepts `PORTLESS=skip`.
+
+## Info
+
+```bash
+portless --help
+portless --version
+```
